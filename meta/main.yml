@@ -1,0 +1,29 @@
+---
+galaxy_info:
+  author: y.kossin
+  role_name: host-optimization
+  namespace: ykossin
+  description: Оптимизация ОС и хоста для виртуализации (KVM/libvirt)
+  license: ISC
+  min_ansible_version: "2.9"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - bullseye
+        - trixie
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+        - noble
+  galaxy_tags:
+    - optimization
+    - virtualization
+    - kvm
+    - libvirt
+    - performance
+    - debian
+    - ubuntu
+
+dependencies: []

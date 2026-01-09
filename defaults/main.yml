@@ -1,0 +1,112 @@
+---
+# Переменные по умолчанию для роли host-optimization
+# Обновлено: январь 2026
+
+# Включить оптимизацию хоста
+host_optimization_enabled: true
+
+# Оптимизация для виртуализации
+host_optimization_for_virtualization: true
+
+# === Настройки сети ===
+
+# Включить IP forwarding (для виртуализации)
+host_ip_forward_enabled: true
+host_ip_forward_ipv4: true
+host_ip_forward_ipv6: false
+
+# === Настройки памяти ===
+
+# Оптимизация swappiness (для серверов с большим RAM)
+host_swappiness: 10  # Рекомендуется 1-10 для серверов с большим RAM
+
+# Параметры dirty страниц (память перед записью на диск)
+host_dirty_ratio: 10
+host_dirty_background_ratio: 5
+
+# Overcommit памяти (для виртуализации)
+host_overcommit_memory: 1  # 0 - эвристический, 1 - всегда, 2 - не overcommit
+
+# Hugepages (опционально, для высокой производительности VM)
+host_hugepages_enabled: false
+host_hugepages_count: 1024  # Количество hugepages (2MB каждая)
+
+# === Настройки ядра ===
+
+# Параметры ядра для виртуализации
+host_kernel_params:
+  # IOMMU для виртуализации (PCI passthrough)
+  - name: "intel_iommu"
+    value: "on"
+    enabled: false  # Только для Intel
+  - name: "amd_iommu"
+    value: "on"
+    enabled: true   # Для AMD процессоров
+  - name: "iommu"
+    value: "pt"
+    enabled: true   # Pass-through mode для лучшей производительности
+  
+  # Оптимизация производительности
+  - name: "transparent_hugepage"
+    value: "always"
+    enabled: true
+  - name: "transparent_hugepage_defrag"
+    value: "always"
+    enabled: true
+
+# === Настройки CPU ===
+
+# CPU governor (производительность)
+host_cpu_governor: "performance"  # performance, powersave, ondemand, conservative
+
+# CPU frequency scaling
+host_cpu_scaling_enabled: true
+
+# === Настройки дисков ===
+
+# Добавить noatime в fstab (отключить обновление времени доступа)
+host_fstab_noatime: true
+
+# Настройки I/O scheduler
+host_io_scheduler: "none"  # none для NVMe, deadline/noop для SSD, cfq для HDD
+
+# === Настройки файловых систем ===
+
+# Увеличить лимиты файловых дескрипторов
+host_ulimit_nofile: 65536
+host_ulimit_nproc: 65536
+
+# === Настройки безопасности ===
+
+# Отключить swap (опционально, только если достаточно RAM)
+host_swap_disabled: false
+
+# Настройки sysctl для безопасности
+host_security_sysctl:
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv4.ip_forward: 1  # Включается отдельно, если host_ip_forward_enabled
+
+# === Настройки производительности сети ===
+
+host_network_optimization:
+  net.core.rmem_max: 134217728
+  net.core.wmem_max: 134217728
+  net.ipv4.tcp_rmem: "4096 87380 134217728"
+  net.ipv4.tcp_wmem: "4096 65536 134217728"
+  net.core.netdev_max_backlog: 5000
+  net.ipv4.tcp_fin_timeout: 30
+  net.ipv4.tcp_keepalive_time: 300
+
+# === Настройки для KVM/libvirt ===
+
+# Увеличить лимиты для libvirt
+host_libvirt_limits:
+  soft_nofile: 65536
+  hard_nofile: 65536
+  soft_nproc: 65536
+  hard_nproc: 65536
+  soft_memlock: "unlimited"
+  hard_memlock: "unlimited"

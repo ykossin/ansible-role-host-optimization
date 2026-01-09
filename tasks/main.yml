@@ -1,0 +1,280 @@
+---
+# Основные задачи для оптимизации хоста
+
+- name: Проверка архитектуры процессора
+  command: uname -m
+  register: host_arch
+  changed_when: false
+  tags:
+    - optimization
+    - check
+
+- name: Определение типа процессора (Intel/AMD)
+  shell: grep -E "(vmx|svm)" /proc/cpuinfo | head -1
+  register: cpu_virtualization_flag
+  changed_when: false
+  failed_when: false
+  tags:
+    - optimization
+    - check
+
+- name: Установка необходимых пакетов для оптимизации
+  apt:
+    name:
+      - cpufrequtils
+      - tuned
+      - sysfsutils
+    state: present
+    update_cache: true
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - packages
+
+- name: Включение IP forwarding для виртуализации
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    sysctl_set: true
+    reload: true
+  when:
+    - host_optimization_enabled
+    - host_ip_forward_enabled
+    - host_ip_forward_ipv4
+  tags:
+    - optimization
+    - network
+
+- name: Включение IP forwarding IPv6
+  sysctl:
+    name: net.ipv6.conf.all.forwarding
+    value: '1'
+    state: present
+    sysctl_set: true
+    reload: true
+  when:
+    - host_optimization_enabled
+    - host_ip_forward_enabled
+    - host_ip_forward_ipv6
+  tags:
+    - optimization
+    - network
+
+- name: Оптимизация swappiness
+  sysctl:
+    name: vm.swappiness
+    value: "{{ host_swappiness }}"
+    state: present
+    sysctl_set: true
+    reload: true
+  when: host_optimization_enabled
+  tags:
+    - optimization
+    - memory
+
+- name: Настройка параметров памяти для виртуализации
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: true
+    reload: true
+  loop:
+    - { name: 'vm.dirty_ratio', value: "{{ host_dirty_ratio }}" }
+    - { name: 'vm.dirty_background_ratio', value: "{{ host_dirty_background_ratio }}" }
+    - { name: 'vm.overcommit_memory', value: "{{ host_overcommit_memory }}" }
+  when: host_optimization_enabled
+  tags:
+    - optimization
+    - memory
+
+- name: Настройка hugepages
+  sysctl:
+    name: vm.nr_hugepages
+    value: "{{ host_hugepages_count }}"
+    state: present
+    sysctl_set: true
+    reload: true
+  when:
+    - host_optimization_enabled
+    - host_hugepages_enabled
+  tags:
+    - optimization
+    - memory
+    - hugepages
+
+- name: Получение текущих параметров ядра из GRUB
+  shell: grep "^GRUB_CMDLINE_LINUX=" /etc/default/grub | sed 's/GRUB_CMDLINE_LINUX="//;s/"$//' || echo ""
+  register: current_grub_params
+  changed_when: false
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - kernel
+
+- name: Добавление параметров ядра в GRUB_CMDLINE_LINUX
+  replace:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX="(.*)"'
+    replace: 'GRUB_CMDLINE_LINUX="\1 {{ item.name }}={{ item.value }}"'
+  loop: "{{ host_kernel_params | selectattr('enabled', 'equalto', true) | list }}"
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - item.enabled | default(false)
+    - (current_grub_params.stdout | default('')) is not search(item.name)
+  notify: update grub
+  tags:
+    - optimization
+    - kernel
+
+- name: Настройка CPU governor для производительности
+  shell: |
+    if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
+      for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        echo {{ host_cpu_governor }} > $cpu 2>/dev/null || true
+      done
+    fi
+  when:
+    - host_optimization_enabled
+    - host_cpu_scaling_enabled
+  register: cpu_governor_set
+  changed_when: "'performance' not in cpu_governor_set.stdout"
+  tags:
+    - optimization
+    - cpu
+
+- name: Установка CPU governor по умолчанию
+  lineinfile:
+    path: /etc/default/cpufrequtils
+    regexp: '^GOVERNOR='
+    line: "GOVERNOR={{ host_cpu_governor }}"
+    create: true
+  when:
+    - host_optimization_enabled
+    - host_cpu_scaling_enabled
+  tags:
+    - optimization
+    - cpu
+
+- name: Добавление noatime в fstab для корневой файловой системы
+  replace:
+    path: /etc/fstab
+    regexp: '^(UUID=.*\s+/\s+ext4\s+)(defaults)(.*)'
+    replace: '\1defaults,noatime,nodiratime\3'
+  when:
+    - host_optimization_enabled
+    - host_fstab_noatime
+  register: fstab_modified
+  tags:
+    - optimization
+    - filesystem
+
+- name: Применение noatime без перезагрузки
+  mount:
+    path: /
+    opts: remount,noatime,nodiratime
+  when:
+    - host_optimization_enabled
+    - host_fstab_noatime
+    - fstab_modified.changed
+  tags:
+    - optimization
+    - filesystem
+
+- name: Настройка лимитов системы
+  lineinfile:
+    path: /etc/security/limits.conf
+    regexp: '^\*\s+(soft|hard)\s+{{ item.type }}\s+.*'
+    line: '* {{ item.type }} {{ item.name }} {{ item.value }}'
+    create: true
+  loop:
+    - { type: "soft", name: "nofile", value: "{{ host_ulimit_nofile }}" }
+    - { type: "hard", name: "nofile", value: "{{ host_ulimit_nofile }}" }
+    - { type: "soft", name: "nproc", value: "{{ host_ulimit_nproc }}" }
+    - { type: "hard", name: "nproc", value: "{{ host_ulimit_nproc }}" }
+  when: host_optimization_enabled
+  tags:
+    - optimization
+    - limits
+
+- name: Настройка лимитов для libvirt
+  lineinfile:
+    path: /etc/security/limits.conf
+    regexp: '^#\s+libvirt\s+limits'
+    line: "# libvirt limits"
+    insertafter: '^# End of file'
+    create: true
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - limits
+    - libvirt
+
+- name: Добавление лимитов libvirt
+  lineinfile:
+    path: /etc/security/limits.conf
+    regexp: '^\*\s+(soft|hard)\s+memlock\s+.*'
+    line: '* {{ item.type }} memlock {{ host_libvirt_limits[item.name] }}'
+    create: true
+  loop:
+    - { type: "soft", name: "soft_memlock" }
+    - { type: "hard", name: "hard_memlock" }
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - limits
+    - libvirt
+
+- name: Настройка параметров безопасности sysctl
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: true
+    reload: true
+  loop: "{{ host_security_sysctl | dict2items }}"
+  when:
+    - host_optimization_enabled
+    - item.key != "net.ipv4.ip_forward" or not host_ip_forward_enabled
+  tags:
+    - optimization
+    - security
+
+- name: Настройка параметров производительности сети
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: true
+    reload: true
+  loop: "{{ host_network_optimization | dict2items }}"
+  when: host_optimization_enabled
+  tags:
+    - optimization
+    - network
+
+- name: Отображение информации об оптимизации
+  debug:
+    msg:
+      - "Оптимизация хоста завершена!"
+      - "IP forwarding: {{ 'включен' if host_ip_forward_enabled else 'выключен' }}"
+      - "Swappiness: {{ host_swappiness }}"
+      - "CPU governor: {{ host_cpu_governor }}"
+      - "Hugepages: {{ 'включены (' + host_hugepages_count|string + ')' if host_hugepages_enabled else 'выключены' }}"
+      - "Noatime: {{ 'включен' if host_fstab_noatime else 'выключен' }}"
+      - ""
+      - "Для применения изменений ядра требуется перезагрузка!"
+      - "Проверка: sysctl -a | grep -E '(vm.swappiness|vm.dirty|net.ipv4.ip_forward)'"
+  when: host_optimization_enabled
+  tags:
+    - optimization

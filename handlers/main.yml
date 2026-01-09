@@ -1,0 +1,7 @@
+---
+# Обработчики событий для роли host-optimization
+
+- name: update grub
+  command: update-grub
+  args:
+    creates: /boot/grub/grub.cfg
