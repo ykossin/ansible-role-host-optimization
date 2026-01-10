@@ -1,0 +1,53 @@
+---
+# Настройка системных лимитов
+
+- name: Настройка лимитов системы
+  lineinfile:
+    path: /etc/security/limits.conf
+    regexp: '^\*\s+(soft|hard)\s+{{ item.name }}\s+.*'
+    line: '* {{ item.type }} {{ item.name }} {{ item.value }}'
+    create: true
+    mode: '0644'
+  loop:
+    - { type: "soft", name: "nofile", value: "{{ host_ulimit_nofile }}" }
+    - { type: "hard", name: "nofile", value: "{{ host_ulimit_nofile }}" }
+    - { type: "soft", name: "nproc", value: "{{ host_ulimit_nproc }}" }
+    - { type: "hard", name: "nproc", value: "{{ host_ulimit_nproc }}" }
+  when: host_optimization_enabled
+  tags:
+    - optimization
+    - limits
+
+- name: Настройка лимитов для libvirt
+  lineinfile:
+    path: /etc/security/limits.conf
+    regexp: '^#\s+libvirt\s+limits'
+    line: "# libvirt limits"
+    insertafter: '^# End of file'
+    create: true
+    mode: '0644'
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - limits
+    - libvirt
+
+- name: Добавление лимитов libvirt
+  lineinfile:
+    path: /etc/security/limits.conf
+    regexp: '^\*\s+(soft|hard)\s+memlock\s+.*'
+    line: '* {{ item.type }} memlock {{ host_libvirt_limits[item.name] }}'
+    create: true
+    mode: '0644'
+  loop:
+    - { type: "soft", name: "soft_memlock" }
+    - { type: "hard", name: "hard_memlock" }
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - limits
+    - libvirt

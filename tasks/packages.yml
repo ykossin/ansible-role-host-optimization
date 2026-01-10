@@ -1,0 +1,17 @@
+---
+# Установка необходимых пакетов
+
+- name: Установка необходимых пакетов для оптимизации
+  apt:
+    name:
+      - cpufrequtils
+      - tuned
+      - sysfsutils
+    state: present
+    update_cache: true
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - packages

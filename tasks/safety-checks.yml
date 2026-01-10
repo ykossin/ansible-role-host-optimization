@@ -1,0 +1,216 @@
+---
+# Проверки безопасности перед применением критических изменений
+
+- name: Проверка доступной памяти перед отключением swap
+  shell: |
+    total_mem=$(free -g | awk '/^Mem:/ {print $2}')
+    echo "$total_mem"
+  register: total_memory_gb
+  changed_when: false
+  when:
+    - host_optimization_enabled
+    - host_swap_disabled
+    - not ansible_check_mode
+  tags:
+    - optimization
+    - safety
+    - swap
+
+- name: Критическое предупреждение об отключении swap
+  fail:
+    msg: |
+      ⚠️  КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ: Попытка отключить swap!
+      
+      Отключение swap может привести к:
+      - Недостатку памяти при пиковых нагрузках
+      - Завершению процессов OOM killer
+      - Нестабильности системы
+      
+      Доступная память: {{ total_memory_gb.stdout }} GB
+      
+      Рекомендации:
+      1. Убедитесь, что у вас достаточно RAM (минимум 16GB для серверов)
+      2. Проверьте использование swap: free -h
+      3. Рассмотрите уменьшение swappiness вместо полного отключения
+      4. Убедитесь, что у вас есть доступ к консоли сервера
+      
+      Если вы уверены, что хотите отключить swap, установите:
+      host_optimization_confirm_dangerous: true
+  when:
+    - host_optimization_enabled
+    - host_swap_disabled
+    - host_optimization_confirm_dangerous | default(false) == false
+    - not ansible_check_mode
+    - total_memory_gb.stdout | int < 16
+  tags:
+    - optimization
+    - safety
+    - swap
+
+- name: Предупреждение об отключении swap (не критическое)
+  debug:
+    msg:
+      - "⚠️  ВНИМАНИЕ: Будет отключен swap!"
+      - "Доступная память: {{ total_memory_gb.stdout }} GB"
+      - "Убедитесь, что у вас достаточно RAM для работы без swap"
+      - "Для подтверждения установите: host_optimization_confirm_dangerous: true"
+  when:
+    - host_optimization_enabled
+    - host_swap_disabled
+    - host_optimization_confirm_dangerous | default(false) == false
+    - not ansible_check_mode
+    - total_memory_gb.stdout | int >= 16
+  tags:
+    - optimization
+    - safety
+    - swap
+
+- name: Проверка текущего swap использования
+  shell: |
+    swap_used=$(free -m | awk '/^Swap:/ {print $3}')
+    swap_total=$(free -m | awk '/^Swap:/ {print $2}')
+    if [ "$swap_total" -gt 0 ]; then
+      swap_percent=$((swap_used * 100 / swap_total))
+      echo "$swap_percent"
+    else
+      echo "0"
+    fi
+  register: swap_usage_percent
+  changed_when: false
+  failed_when: false
+  when:
+    - host_optimization_enabled
+    - host_swap_disabled
+    - not ansible_check_mode
+  tags:
+    - optimization
+    - safety
+    - swap
+
+- name: Предупреждение об активном использовании swap
+  fail:
+    msg: |
+      ⚠️  КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ: Swap активно используется!
+      
+      Текущее использование swap: {{ swap_usage_percent.stdout }}%
+      
+      Отключение swap при активном использовании может привести к:
+      - Немедленному завершению процессов
+      - Нестабильности системы
+      - Потере данных
+      
+      Рекомендации:
+      1. Освободите память перед отключением swap
+      2. Проверьте процессы, использующие swap: smem -s swap -r
+      3. Рассмотрите увеличение RAM вместо отключения swap
+      4. Убедитесь, что у вас есть доступ к консоли сервера
+      
+      Если вы уверены, что хотите продолжить, установите:
+      host_optimization_confirm_dangerous: true
+  when:
+    - host_optimization_enabled
+    - host_swap_disabled
+    - host_optimization_confirm_dangerous | default(false) == false
+    - not ansible_check_mode
+    - swap_usage_percent.stdout | int > 10
+  tags:
+    - optimization
+    - safety
+    - swap
+
+- name: Проверка изменений в GRUB перед применением
+  shell: |
+    current_params=$(grep "^GRUB_CMDLINE_LINUX=" /etc/default/grub | sed 's/GRUB_CMDLINE_LINUX="//;s/"$//' || echo "")
+    echo "$current_params"
+  register: current_grub_before_changes
+  changed_when: false
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - not ansible_check_mode
+  tags:
+    - optimization
+    - safety
+    - kernel
+
+- name: Предупреждение об изменении параметров ядра
+  debug:
+    msg:
+      - "⚠️  ВНИМАНИЕ: Будут изменены параметры ядра в GRUB!"
+      - "Текущие параметры: {{ current_grub_before_changes.stdout }}"
+      - "Изменения требуют перезагрузки системы!"
+      - "Убедитесь, что у вас есть доступ к консоли сервера"
+      - "После перезагрузки проверьте: cat /proc/cmdline"
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - not ansible_check_mode
+  tags:
+    - optimization
+    - safety
+    - kernel
+
+- name: Проверка изменений в fstab перед применением
+  shell: |
+    if grep -q "noatime" /etc/fstab 2>/dev/null; then
+      echo "already_configured"
+    else
+      echo "not_configured"
+    fi
+  register: fstab_noatime_status
+  changed_when: false
+  failed_when: false
+  when:
+    - host_optimization_enabled
+    - host_fstab_noatime
+    - not ansible_check_mode
+  tags:
+    - optimization
+    - safety
+    - filesystem
+
+- name: Предупреждение об изменении fstab
+  debug:
+    msg:
+      - "⚠️  ВНИМАНИЕ: Будет изменен файл /etc/fstab!"
+      - "Будет добавлен параметр noatime для корневой файловой системы"
+      - "Изменения в fstab критичны - неправильная настройка может"
+      - "привести к невозможности загрузки системы!"
+      - "Резервная копия будет создана автоматически"
+  when:
+    - host_optimization_enabled
+    - host_fstab_noatime
+    - fstab_noatime_status.stdout == "not_configured"
+    - not ansible_check_mode
+  tags:
+    - optimization
+    - safety
+    - filesystem
+
+- name: Проверка критических параметров памяти
+  assert:
+    that:
+      - host_swappiness | int >= 0
+      - host_swappiness | int <= 100
+      - host_dirty_ratio | int >= 0
+      - host_dirty_ratio | int <= 100
+      - host_dirty_background_ratio | int >= 0
+      - host_dirty_background_ratio | int <= 100
+      - host_dirty_background_ratio | int < host_dirty_ratio | int
+    fail_msg: |
+      ⚠️  КРИТИЧЕСКАЯ ОШИБКА: Некорректные параметры памяти!
+      
+      - host_swappiness: {{ host_swappiness }} (должно быть: 0-100)
+      - host_dirty_ratio: {{ host_dirty_ratio }} (должно быть: 0-100)
+      - host_dirty_background_ratio: {{ host_dirty_background_ratio }} (должно быть: 0-100)
+      - host_dirty_background_ratio должен быть меньше host_dirty_ratio!
+      
+      Некорректные параметры могут привести к нестабильности системы!
+    success_msg: "Параметры памяти валидны"
+  when:
+    - host_optimization_enabled
+    - not ansible_check_mode
+  tags:
+    - optimization
+    - safety
+    - memory

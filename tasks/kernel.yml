@@ -1,0 +1,162 @@
+---
+# ============================================================================
+# Настройка параметров ядра
+# ============================================================================
+# Этот файл настраивает параметры ядра Linux через GRUB.
+# Включает автоматическое определение CPU и настройку IOMMU, transparent hugepages.
+#
+# ⚠️ КРИТИЧЕСКАЯ ОПЕРАЦИЯ: Изменение параметров ядра может сделать систему
+# неработоспособной. Требует перезагрузки для применения.
+#
+# Риски:
+# - ⚠️ КРИТИЧЕСКИЙ: Невозможность загрузки системы при неправильных параметрах
+# - ⚠️ Проблемы с драйверами
+# - ⚠️ Потеря доступа к системе
+# ============================================================================
+
+- name: Определение типа процессора для IOMMU
+  # Определяет тип процессора (Intel или AMD) для автоматической настройки IOMMU.
+  # Использует информацию из check.yml (cpu_vendor).
+  #
+  # Что делает:
+  # - Проверяет значение cpu_vendor.stdout
+  # - Устанавливает cpu_type в 'intel' или 'amd'
+  # - Используется для автоматической настройки IOMMU параметров
+  #
+  # Безопасность:
+  # - ✅ Безопасная операция - только определение типа
+  # - ✅ Не изменяет систему
+  set_fact:
+    cpu_type: "{{ 'intel' if 'intel' in cpu_vendor.stdout | default('') else 'amd' }}"
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - cpu_vendor is defined
+  tags:
+    - optimization
+    - kernel
+
+- name: Получение текущих параметров ядра из GRUB
+  # Получает текущие параметры ядра из файла /etc/default/grub.
+  # Используется для проверки, какие параметры уже установлены, чтобы
+  # не добавлять дубликаты.
+  #
+  # Что делает:
+  # - Читает строку GRUB_CMDLINE_LINUX из /etc/default/grub
+  # - Извлекает параметры ядра (удаляет GRUB_CMDLINE_LINUX=" и ")
+  # - Сохраняет в current_grub_params для использования в следующих задачах
+  #
+  # Безопасность:
+  # - ✅ Безопасная операция - только чтение
+  # - ✅ Не изменяет систему
+  shell: grep "^GRUB_CMDLINE_LINUX=" /etc/default/grub | sed 's/GRUB_CMDLINE_LINUX="//;s/"$//' || echo ""
+  register: current_grub_params
+  changed_when: false  # Только чтение, не изменяет систему
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - kernel
+
+- name: Автоматическое определение IOMMU параметров
+  # Автоматически добавляет параметры IOMMU в зависимости от типа процессора.
+  #
+  # Что делает:
+  # - Берет параметры из host_kernel_params
+  # - Удаляет существующие intel_iommu/amd_iommu параметры
+  # - Добавляет соответствующий IOMMU параметр (intel_iommu=on или amd_iommu=on)
+  # - Создает список kernel_params_with_iommu для применения
+  #
+  # IOMMU (Input-Output Memory Management Unit):
+  # - Необходим для PCI passthrough в виртуализации
+  # - Позволяет виртуальным машинам напрямую использовать физические устройства
+  # - intel_iommu=on для процессоров Intel
+  # - amd_iommu=on для процессоров AMD
+  #
+  # Безопасность:
+  # - ✅ Безопасная операция - только подготовка данных
+  # - ✅ Не изменяет систему
+  set_fact:
+    kernel_params_with_iommu: |
+      {{
+        host_kernel_params | default([]) | map('default', {}, omit) | list |
+        map('default', {'enabled': false}, omit) | list |
+        selectattr('enabled', 'equalto', true) | list |
+        rejectattr('name', 'match', '^(intel_iommu|amd_iommu)$') | list +
+        ([
+          {'name': cpu_type + '_iommu', 'value': 'on', 'enabled': true}
+        ] if cpu_type is defined and cpu_type != 'unknown' else [])
+      }}
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - cpu_type is defined
+  tags:
+    - optimization
+    - kernel
+
+- name: Использование параметров ядра без автоматического IOMMU
+  # Используется, если не удалось определить тип процессора.
+  # Берет параметры из host_kernel_params без автоматического добавления IOMMU.
+  #
+  # Безопасность:
+  # - ✅ Безопасная операция - только подготовка данных
+  # - ✅ Не изменяет систему
+  set_fact:
+    kernel_params_with_iommu: "{{ host_kernel_params | default([]) | selectattr('enabled', 'equalto', true) | list }}"
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - cpu_type is not defined or cpu_type == 'unknown'
+  tags:
+    - optimization
+    - kernel
+
+- name: Добавление параметров ядра в GRUB_CMDLINE_LINUX
+  # ⚠️ КРИТИЧЕСКАЯ ОПЕРАЦИЯ: Добавляет параметры ядра в GRUB_CMDLINE_LINUX.
+  #
+  # Что делает:
+  # - Находит строку GRUB_CMDLINE_LINUX в /etc/default/grub
+  # - Добавляет новые параметры ядра к существующим
+  # - Вызывает handler для обновления GRUB (update-grub)
+  #
+  # Параметры ядра:
+  # - intel_iommu=on / amd_iommu=on: включает IOMMU для PCI passthrough
+  # - iommu=pt: режим pass-through для лучшей производительности
+  # - transparent_hugepage=always: всегда использовать hugepages
+  # - transparent_hugepage_defrag=always: всегда дефрагментировать hugepages
+  #
+  # Риски:
+  # - ⚠️ КРИТИЧЕСКИЙ: Неправильные параметры могут сделать систему неработоспособной
+  # - ⚠️ Требует перезагрузки для применения
+  # - ⚠️ Может привести к проблемам с драйверами
+  # - ⚠️ Может привести к потере доступа к системе
+  #
+  # Требования:
+  # - Резервная копия создается автоматически в backup.yml
+  # - Проверки безопасности выполняются в safety-checks.yml
+  #
+  # Восстановление:
+  # - Восстановите /etc/default/grub из бэкапа
+  # - Выполните update-grub
+  # - Перезагрузите систему
+  #
+  # Применяется: Сразу, но полный эффект после перезагрузки
+  # Файл: /etc/default/grub
+  # Handler: update grub (выполняет update-grub)
+  replace:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX="(.*)"'  # Находит строку GRUB_CMDLINE_LINUX
+    replace: 'GRUB_CMDLINE_LINUX="\1 {{ item.name }}={{ item.value }}"'  # Добавляет параметр
+  loop: "{{ kernel_params_with_iommu | default(host_kernel_params | selectattr('enabled', 'equalto', true) | list) }}"
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - item.enabled | default(false)  # Только включенные параметры
+    - (current_grub_params.stdout | default('')) is not search(item.name)  # Не добавлять, если уже есть
+  notify: update grub  # Вызывает handler для обновления GRUB
+  check_mode: false    # Нельзя выполнить в check mode
+  tags:
+    - optimization
+    - kernel

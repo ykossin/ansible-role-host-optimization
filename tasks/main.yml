@@ -1,280 +1,227 @@
 ---
+# ============================================================================
 # Основные задачи для оптимизации хоста
+# ============================================================================
+# Этот файл является главным файлом роли и импортирует все модули задач
+# в правильном порядке. Порядок выполнения критически важен для безопасности
+# и корректной работы роли.
+#
+# Порядок выполнения:
+# 1. Валидация переменных - проверка корректности всех параметров
+# 2. Проверка системы - сбор информации о системе
+# 3. Проверки безопасности - критические проверки перед опасными операциями
+# 4. Резервное копирование - создание бэкапов критических файлов
+# 5. Установка пакетов - установка необходимых утилит
+# 6. Оптимизация памяти - настройка параметров памяти
+# 7. Оптимизация сети - настройка сетевых параметров
+# 8. Оптимизация CPU - настройка CPU governor
+# 9. Настройка параметров ядра - изменение GRUB (требует перезагрузки)
+# 10. Оптимизация файловых систем - изменение fstab и I/O scheduler
+# 11. Настройка системных лимитов - увеличение лимитов процессов
+# 12. Настройка tuned - активация профиля tuned
+# 13. Проверка применённых настроек - верификация изменений
+# 14. Отображение информации - итоговый вывод
+# ============================================================================
 
-- name: Проверка архитектуры процессора
-  command: uname -m
-  register: host_arch
-  changed_when: false
-  tags:
-    - optimization
-    - check
+- name: Валидация переменных
+  # Первый шаг: проверка всех переменных на корректность.
+  # Если переменные некорректны, выполнение останавливается с понятным сообщением.
+  # Это предотвращает применение некорректных настроек, которые могут
+  # привести к нестабильности системы.
+  #
+  # Файл: tasks/validation.yml
+  # Теги: optimization, validation
+  ansible.builtin.import_tasks: validation.yml
 
-- name: Определение типа процессора (Intel/AMD)
-  shell: grep -E "(vmx|svm)" /proc/cpuinfo | head -1
-  register: cpu_virtualization_flag
-  changed_when: false
-  failed_when: false
-  tags:
-    - optimization
-    - check
+- name: Проверка системы
+  # Второй шаг: сбор информации о системе.
+  # Определяет архитектуру, тип процессора, поддержку виртуализации,
+  # информацию о дисках. Эта информация используется для автоматической
+  # настройки оптимизаций (например, выбор IOMMU параметров).
+  #
+  # Файл: tasks/check.yml
+  # Теги: optimization, check
+  # Безопасность: ✅ Безопасная операция - только чтение информации
+  ansible.builtin.import_tasks: check.yml
 
-- name: Установка необходимых пакетов для оптимизации
-  apt:
-    name:
-      - cpufrequtils
-      - tuned
-      - sysfsutils
-    state: present
-    update_cache: true
-  when:
-    - host_optimization_enabled
-    - host_optimization_for_virtualization
-  tags:
-    - optimization
-    - packages
+- name: Проверки безопасности перед критическими изменениями
+  # Третий шаг: критические проверки безопасности.
+  # Выполняет проверки перед опасными операциями:
+  # - Проверка памяти перед отключением swap
+  # - Проверка использования swap
+  # - Предупреждения перед изменением GRUB
+  # - Предупреждения перед изменением fstab
+  # - Валидация параметров памяти
+  #
+  # Файл: tasks/safety-checks.yml
+  # Теги: optimization, safety
+  # Безопасность: ⚠️ Может остановить выполнение при критических проблемах
+  ansible.builtin.import_tasks: safety-checks.yml
 
-- name: Включение IP forwarding для виртуализации
-  sysctl:
-    name: net.ipv4.ip_forward
-    value: '1'
-    state: present
-    sysctl_set: true
-    reload: true
-  when:
-    - host_optimization_enabled
-    - host_ip_forward_enabled
-    - host_ip_forward_ipv4
-  tags:
-    - optimization
-    - network
+- name: Резервное копирование конфигураций
+  # Четвертый шаг: создание резервных копий критических файлов.
+  # Бэкапирует файлы перед их изменением:
+  # - /etc/default/grub - перед изменением параметров ядра
+  # - /etc/fstab - перед добавлением noatime
+  # - /etc/security/limits.conf - перед изменением лимитов
+  #
+  # Бэкапы сохраняются в: /root/ansible-backups/host-optimization/
+  # С временными метками для возможности восстановления.
+  #
+  # Файл: tasks/backup.yml
+  # Теги: optimization, backup
+  # Безопасность: ✅ Безопасная операция - только создание копий
+  ansible.builtin.import_tasks: backup.yml
 
-- name: Включение IP forwarding IPv6
-  sysctl:
-    name: net.ipv6.conf.all.forwarding
-    value: '1'
-    state: present
-    sysctl_set: true
-    reload: true
-  when:
-    - host_optimization_enabled
-    - host_ip_forward_enabled
-    - host_ip_forward_ipv6
-  tags:
-    - optimization
-    - network
+- name: Установка пакетов
+  # Пятый шаг: установка необходимых пакетов.
+  # Устанавливает:
+  # - cpufrequtils - утилиты для управления частотой CPU
+  # - tuned - система настройки производительности
+  # - sysfsutils - утилиты для работы с sysfs
+  #
+  # Файл: tasks/packages.yml
+  # Теги: optimization, packages
+  # Безопасность: ⚠️ Требует обновления кэша apt
+  ansible.builtin.import_tasks: packages.yml
 
-- name: Оптимизация swappiness
-  sysctl:
-    name: vm.swappiness
-    value: "{{ host_swappiness }}"
-    state: present
-    sysctl_set: true
-    reload: true
-  when: host_optimization_enabled
-  tags:
-    - optimization
-    - memory
+- name: Оптимизация памяти
+  # Шестой шаг: оптимизация параметров памяти.
+  # Настраивает:
+  # - Swappiness - агрессивность использования swap
+  # - Dirty pages - параметры записи на диск
+  # - Overcommit memory - политика overcommit
+  # - Hugepages - большие страницы памяти
+  # - Отключение swap (опционально, требует подтверждения)
+  #
+  # Файл: tasks/memory.yml
+  # Теги: optimization, memory, swap, hugepages
+  # Безопасность: ⚠️ Отключение swap - критическая операция
+  ansible.builtin.import_tasks: memory.yml
 
-- name: Настройка параметров памяти для виртуализации
-  sysctl:
-    name: "{{ item.name }}"
-    value: "{{ item.value }}"
-    state: present
-    sysctl_set: true
-    reload: true
-  loop:
-    - { name: 'vm.dirty_ratio', value: "{{ host_dirty_ratio }}" }
-    - { name: 'vm.dirty_background_ratio', value: "{{ host_dirty_background_ratio }}" }
-    - { name: 'vm.overcommit_memory', value: "{{ host_overcommit_memory }}" }
-  when: host_optimization_enabled
-  tags:
-    - optimization
-    - memory
+- name: Оптимизация сети
+  # Седьмой шаг: оптимизация сетевых параметров.
+  # Настраивает:
+  # - IP forwarding (IPv4/IPv6) - для маршрутизации пакетов VM
+  # - TCP буферы - для лучшей производительности сети
+  # - Параметры безопасности сети
+  #
+  # Файл: tasks/network.yml
+  # Теги: optimization, network, security
+  # Безопасность: ⚠️ IP forwarding может изменить поведение файрвола
+  ansible.builtin.import_tasks: network.yml
 
-- name: Настройка hugepages
-  sysctl:
-    name: vm.nr_hugepages
-    value: "{{ host_hugepages_count }}"
-    state: present
-    sysctl_set: true
-    reload: true
-  when:
-    - host_optimization_enabled
-    - host_hugepages_enabled
-  tags:
-    - optimization
-    - memory
-    - hugepages
+- name: Оптимизация CPU
+  # Восьмой шаг: оптимизация CPU.
+  # Настраивает:
+  # - CPU governor - алгоритм управления частотой CPU
+  # - Настройки cpufrequtils - для применения при загрузке
+  #
+  # Файл: tasks/cpu.yml
+  # Теги: optimization, cpu
+  # Безопасность: ⚠️ Режим performance увеличивает энергопотребление
+  ansible.builtin.import_tasks: cpu.yml
 
-- name: Получение текущих параметров ядра из GRUB
-  shell: grep "^GRUB_CMDLINE_LINUX=" /etc/default/grub | sed 's/GRUB_CMDLINE_LINUX="//;s/"$//' || echo ""
-  register: current_grub_params
-  changed_when: false
-  when:
-    - host_optimization_enabled
-    - host_optimization_for_virtualization
-  tags:
-    - optimization
-    - kernel
+- name: Настройка параметров ядра
+  # Девятый шаг: настройка параметров ядра через GRUB.
+  # ⚠️ КРИТИЧЕСКАЯ ОПЕРАЦИЯ: Изменяет /etc/default/grub
+  #
+  # Настраивает:
+  # - IOMMU параметры (автоматически определяется Intel/AMD)
+  # - Transparent hugepages
+  # - Другие параметры ядра из host_kernel_params
+  #
+  # Требует перезагрузки для применения!
+  #
+  # Файл: tasks/kernel.yml
+  # Теги: optimization, kernel
+  # Безопасность: ⚠️ КРИТИЧЕСКИЙ - может сделать систему неработоспособной
+  ansible.builtin.import_tasks: kernel.yml
 
-- name: Добавление параметров ядра в GRUB_CMDLINE_LINUX
-  replace:
-    path: /etc/default/grub
-    regexp: '^GRUB_CMDLINE_LINUX="(.*)"'
-    replace: 'GRUB_CMDLINE_LINUX="\1 {{ item.name }}={{ item.value }}"'
-  loop: "{{ host_kernel_params | selectattr('enabled', 'equalto', true) | list }}"
-  when:
-    - host_optimization_enabled
-    - host_optimization_for_virtualization
-    - item.enabled | default(false)
-    - (current_grub_params.stdout | default('')) is not search(item.name)
-  notify: update grub
-  tags:
-    - optimization
-    - kernel
+- name: Оптимизация файловых систем
+  # Десятый шаг: оптимизация файловых систем.
+  # ⚠️ КРИТИЧЕСКАЯ ОПЕРАЦИЯ: Изменяет /etc/fstab
+  #
+  # Настраивает:
+  # - Noatime в fstab - отключение обновления времени доступа
+  # - I/O scheduler для всех дисков
+  # - Сохранение I/O scheduler в udev правилах
+  #
+  # Требует перезагрузки для полного применения!
+  #
+  # Файл: tasks/filesystem.yml
+  # Теги: optimization, filesystem, io
+  # Безопасность: ⚠️ КРИТИЧЕСКИЙ - может сделать систему неработоспособной
+  ansible.builtin.import_tasks: filesystem.yml
 
-- name: Настройка CPU governor для производительности
-  shell: |
-    if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
-      for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        echo {{ host_cpu_governor }} > $cpu 2>/dev/null || true
-      done
-    fi
-  when:
-    - host_optimization_enabled
-    - host_cpu_scaling_enabled
-  register: cpu_governor_set
-  changed_when: "'performance' not in cpu_governor_set.stdout"
-  tags:
-    - optimization
-    - cpu
+- name: Настройка системных лимитов
+  # Одиннадцатый шаг: настройка системных лимитов.
+  # Настраивает:
+  # - Лимиты файловых дескрипторов (nofile)
+  # - Лимиты процессов (nproc)
+  # - Специальные лимиты для libvirt
+  #
+  # Файл: tasks/limits.yml
+  # Теги: optimization, limits, libvirt
+  # Безопасность: ⚠️ Слишком высокие лимиты могут увеличить использование памяти
+  ansible.builtin.import_tasks: limits.yml
 
-- name: Установка CPU governor по умолчанию
-  lineinfile:
-    path: /etc/default/cpufrequtils
-    regexp: '^GOVERNOR='
-    line: "GOVERNOR={{ host_cpu_governor }}"
-    create: true
-  when:
-    - host_optimization_enabled
-    - host_cpu_scaling_enabled
-  tags:
-    - optimization
-    - cpu
+- name: Настройка tuned
+  # Двенадцатый шаг: настройка tuned профилей.
+  # Настраивает:
+  # - Активация профиля tuned (по умолчанию: virtual-host)
+  # - Включение и запуск сервиса tuned
+  #
+  # Файл: tasks/tuned.yml
+  # Теги: optimization, tuned
+  # Безопасность: ⚠️ Tuned может изменять множество параметров системы
+  ansible.builtin.import_tasks: tuned.yml
 
-- name: Добавление noatime в fstab для корневой файловой системы
-  replace:
-    path: /etc/fstab
-    regexp: '^(UUID=.*\s+/\s+ext4\s+)(defaults)(.*)'
-    replace: '\1defaults,noatime,nodiratime\3'
-  when:
-    - host_optimization_enabled
-    - host_fstab_noatime
-  register: fstab_modified
-  tags:
-    - optimization
-    - filesystem
-
-- name: Применение noatime без перезагрузки
-  mount:
-    path: /
-    opts: remount,noatime,nodiratime
-  when:
-    - host_optimization_enabled
-    - host_fstab_noatime
-    - fstab_modified.changed
-  tags:
-    - optimization
-    - filesystem
-
-- name: Настройка лимитов системы
-  lineinfile:
-    path: /etc/security/limits.conf
-    regexp: '^\*\s+(soft|hard)\s+{{ item.type }}\s+.*'
-    line: '* {{ item.type }} {{ item.name }} {{ item.value }}'
-    create: true
-  loop:
-    - { type: "soft", name: "nofile", value: "{{ host_ulimit_nofile }}" }
-    - { type: "hard", name: "nofile", value: "{{ host_ulimit_nofile }}" }
-    - { type: "soft", name: "nproc", value: "{{ host_ulimit_nproc }}" }
-    - { type: "hard", name: "nproc", value: "{{ host_ulimit_nproc }}" }
-  when: host_optimization_enabled
-  tags:
-    - optimization
-    - limits
-
-- name: Настройка лимитов для libvirt
-  lineinfile:
-    path: /etc/security/limits.conf
-    regexp: '^#\s+libvirt\s+limits'
-    line: "# libvirt limits"
-    insertafter: '^# End of file'
-    create: true
-  when:
-    - host_optimization_enabled
-    - host_optimization_for_virtualization
-  tags:
-    - optimization
-    - limits
-    - libvirt
-
-- name: Добавление лимитов libvirt
-  lineinfile:
-    path: /etc/security/limits.conf
-    regexp: '^\*\s+(soft|hard)\s+memlock\s+.*'
-    line: '* {{ item.type }} memlock {{ host_libvirt_limits[item.name] }}'
-    create: true
-  loop:
-    - { type: "soft", name: "soft_memlock" }
-    - { type: "hard", name: "hard_memlock" }
-  when:
-    - host_optimization_enabled
-    - host_optimization_for_virtualization
-  tags:
-    - optimization
-    - limits
-    - libvirt
-
-- name: Настройка параметров безопасности sysctl
-  sysctl:
-    name: "{{ item.key }}"
-    value: "{{ item.value }}"
-    state: present
-    sysctl_set: true
-    reload: true
-  loop: "{{ host_security_sysctl | dict2items }}"
-  when:
-    - host_optimization_enabled
-    - item.key != "net.ipv4.ip_forward" or not host_ip_forward_enabled
-  tags:
-    - optimization
-    - security
-
-- name: Настройка параметров производительности сети
-  sysctl:
-    name: "{{ item.key }}"
-    value: "{{ item.value }}"
-    state: present
-    sysctl_set: true
-    reload: true
-  loop: "{{ host_network_optimization | dict2items }}"
-  when: host_optimization_enabled
-  tags:
-    - optimization
-    - network
+- name: Проверка применённых оптимизаций
+  # Тринадцатый шаг: проверка применённых настроек.
+  # Проверяет, что все настройки были применены корректно:
+  # - Swappiness
+  # - IP forwarding
+  # - CPU governor
+  # - Hugepages
+  # - Параметры ядра
+  #
+  # Файл: tasks/verify.yml
+  # Теги: optimization, verify
+  # Безопасность: ✅ Безопасная операция - только чтение информации
+  ansible.builtin.import_tasks: verify.yml
 
 - name: Отображение информации об оптимизации
+  # Четырнадцатый шаг: итоговый вывод информации.
+  # Выводит сводку всех применённых оптимизаций и предупреждения.
+  #
+  # Что выводит:
+  # - Статус всех оптимизаций
+  # - Предупреждение о необходимости перезагрузки
+  # - Индикация режима check mode
+  #
+  # Безопасность: ✅ Безопасная операция - только вывод информации
   debug:
     msg:
-      - "Оптимизация хоста завершена!"
-      - "IP forwarding: {{ 'включен' if host_ip_forward_enabled else 'выключен' }}"
-      - "Swappiness: {{ host_swappiness }}"
-      - "CPU governor: {{ host_cpu_governor }}"
-      - "Hugepages: {{ 'включены (' + host_hugepages_count|string + ')' if host_hugepages_enabled else 'выключены' }}"
-      - "Noatime: {{ 'включен' if host_fstab_noatime else 'выключен' }}"
+      - "=== Оптимизация хоста завершена! ==="
       - ""
-      - "Для применения изменений ядра требуется перезагрузка!"
-      - "Проверка: sysctl -a | grep -E '(vm.swappiness|vm.dirty|net.ipv4.ip_forward)'"
+      - "Применённые оптимизации:"
+      - "  - IP forwarding: {{ 'включен' if host_ip_forward_enabled else 'выключен' }}"
+      - "  - Swappiness: {{ host_swappiness }}"
+      - "  - CPU governor: {{ host_cpu_governor }}"
+      - "  - Hugepages: {{ 'включены (' + host_hugepages_count|string + ')' if host_hugepages_enabled else 'выключены' }}"
+      - "  - Noatime: {{ 'включен' if host_fstab_noatime else 'выключен' }}"
+      - "  - I/O scheduler: {{ host_io_scheduler }}"
+      - "  - Swap: {{ 'отключен' if host_swap_disabled else 'включен' }}"
+      - ""
+      - "⚠️  ВАЖНО: Для применения изменений ядра требуется перезагрузка!"
+      - ""
+      - "Проверка применённых настроек:"
+      - "  sysctl -a | grep -E '(vm.swappiness|vm.dirty|net.ipv4.ip_forward)'"
+      - ""
+      - "{{ '✅ Режим проверки (check mode) - изменения не применены' if ansible_check_mode else '✅ Изменения применены' }}"
+      - ""
+      - "Резервные копии сохранены в: /root/ansible-backups/host-optimization/"
   when: host_optimization_enabled
   tags:
     - optimization

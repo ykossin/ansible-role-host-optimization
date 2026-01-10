@@ -1,0 +1,40 @@
+---
+# Настройка tuned для оптимизации
+
+- name: Проверка доступности tuned
+  command: which tuned-adm
+  register: tuned_available
+  changed_when: false
+  failed_when: false
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - tuned
+
+- name: Активация профиля tuned для виртуализации
+  command: tuned-adm profile {{ host_tuned_profile | default('virtual-host') }}
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - host_tuned_enabled | default(true)
+    - tuned_available.rc == 0
+  register: tuned_profile_set
+  changed_when: "'is not active' in tuned_profile_set.stdout"
+  tags:
+    - optimization
+    - tuned
+
+- name: Включение и запуск сервиса tuned
+  systemd:
+    name: tuned
+    enabled: true
+    state: started
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+    - host_tuned_enabled | default(true)
+  tags:
+    - optimization
+    - tuned

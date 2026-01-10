@@ -1,0 +1,77 @@
+---
+# Проверка применённых оптимизаций
+
+- name: Проверка swappiness
+  command: sysctl -n vm.swappiness
+  register: swappiness_check
+  changed_when: false
+  when: host_optimization_enabled
+  tags:
+    - optimization
+    - verify
+
+- name: Проверка IP forwarding
+  command: sysctl -n net.ipv4.ip_forward
+  register: ip_forward_check
+  changed_when: false
+  when:
+    - host_optimization_enabled
+    - host_ip_forward_enabled
+  tags:
+    - optimization
+    - verify
+
+- name: Проверка CPU governor
+  shell: |
+    if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
+      cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+    else
+      echo "N/A"
+    fi
+  register: cpu_governor_check
+  changed_when: false
+  when:
+    - host_optimization_enabled
+    - host_cpu_scaling_enabled
+  tags:
+    - optimization
+    - verify
+
+- name: Проверка hugepages
+  shell: grep HugePages_Total /proc/meminfo | awk '{print $2}'
+  register: hugepages_check
+  changed_when: false
+  failed_when: false
+  when:
+    - host_optimization_enabled
+    - host_hugepages_enabled
+  tags:
+    - optimization
+    - verify
+
+- name: Проверка параметров ядра
+  command: cat /proc/cmdline
+  register: kernel_params_check
+  changed_when: false
+  when:
+    - host_optimization_enabled
+    - host_optimization_for_virtualization
+  tags:
+    - optimization
+    - verify
+
+- name: Отображение результатов проверки
+  debug:
+    msg:
+      - "=== Результаты проверки оптимизаций ==="
+      - "Swappiness: {{ swappiness_check.stdout | default('N/A') }} (ожидается: {{ host_swappiness }})"
+      - "IP forwarding: {{ ip_forward_check.stdout | default('N/A') }} (ожидается: {{ '1' if host_ip_forward_enabled else '0' }})"
+      - "CPU governor: {{ cpu_governor_check.stdout | default('N/A') }} (ожидается: {{ host_cpu_governor }})"
+      - "Hugepages: {{ hugepages_check.stdout | default('0') }} (ожидается: {{ host_hugepages_count }})"
+      - "Параметры ядра: {{ kernel_params_check.stdout | default('N/A') }}"
+      - ""
+      - "⚠️  Для применения изменений ядра требуется перезагрузка!"
+  when: host_optimization_enabled
+  tags:
+    - optimization
+    - verify

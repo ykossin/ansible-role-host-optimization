@@ -5,6 +5,10 @@
 # Включить оптимизацию хоста
 host_optimization_enabled: true
 
+# Подтверждение опасных операций (swap, fstab, grub)
+# Установите в true только если вы понимаете риски!
+host_optimization_confirm_dangerous: false
+
 # Оптимизация для виртуализации
 host_optimization_for_virtualization: true
 
@@ -110,3 +114,11 @@ host_libvirt_limits:
   hard_nproc: 65536
   soft_memlock: "unlimited"
   hard_memlock: "unlimited"
+
+# === Настройки tuned ===
+
+# Включить настройку tuned профилей
+host_tuned_enabled: true
+
+# Профиль tuned для виртуализации
+host_tuned_profile: "virtual-host"  # virtual-host, virtual-guest, throughput-performance, latency-performance

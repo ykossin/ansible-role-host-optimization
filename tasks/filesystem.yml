@@ -1,0 +1,253 @@
+---
+# ============================================================================
+# Оптимизация файловых систем
+# ============================================================================
+# Этот файл настраивает параметры файловых систем для лучшей производительности.
+# Включает настройку noatime и I/O scheduler.
+#
+# ⚠️ КРИТИЧЕСКАЯ ОПЕРАЦИЯ: Изменение fstab может привести к проблемам загрузки.
+#
+# Риски:
+# - ⚠️ КРИТИЧЕСКИЙ: Невозможность загрузки системы при неправильном fstab
+# - ⚠️ Проблемы с монтированием файловых систем
+# - ⚠️ Потеря доступа к системе
+# ============================================================================
+
+- name: Получение информации о корневой файловой системе
+  # Определяет устройство и тип файловой системы корневого раздела.
+  # Используется для правильной настройки noatime в зависимости от типа ФС.
+  #
+  # Что делает:
+  # - Определяет устройство корневого раздела (например, /dev/sda1 или UUID=...)
+  # - Определяет тип файловой системы (ext4, xfs, btrfs, etc.)
+  # - Сохраняет информацию в формате "device|filesystem"
+  #
+  # Безопасность:
+  # - ✅ Безопасная операция - только чтение информации
+  # - ✅ Не изменяет систему
+  shell: |
+    root_dev=$(df / | tail -1 | awk '{print $1}')
+    root_fs=$(df -T / | tail -1 | awk '{print $2}')
+    echo "$root_dev|$root_fs"
+  register: root_fs_info
+  changed_when: false  # Только чтение, не изменяет систему
+  tags:
+    - optimization
+    - filesystem
+
+- name: Добавление noatime в fstab для корневой файловой системы
+  # ⚠️ КРИТИЧЕСКАЯ ОПЕРАЦИЯ: Добавляет параметр noatime в fstab для ext4.
+  #
+  # Что делает:
+  # - Находит строку с корневой файловой системой ext4 в /etc/fstab
+  # - Добавляет noatime и nodiratime к опциям монтирования
+  # - noatime: отключает обновление времени доступа к файлам
+  # - nodiratime: отключает обновление времени доступа к директориям
+  #
+  # Преимущества noatime:
+  # - Снижает нагрузку на диск (не нужно обновлять время доступа при каждом чтении)
+  # - Улучшает производительность файловой системы
+  # - Уменьшает износ SSD дисков
+  #
+  # Недостатки noatime:
+  # - Некоторые приложения могут полагаться на время доступа (например, backup утилиты)
+  # - Может затруднить отладку проблем с файлами
+  #
+  # Риски:
+  # - ⚠️ КРИТИЧЕСКИЙ: Неправильное изменение fstab может сделать систему неработоспособной
+  # - ⚠️ Требует перезагрузки для полного применения
+  # - ⚠️ Некоторые приложения могут не работать корректно
+  #
+  # Требования:
+  # - Резервная копия создается автоматически в backup.yml
+  # - Проверки безопасности выполняются в safety-checks.yml
+  #
+  # Восстановление:
+  # - Восстановите /etc/fstab из бэкапа
+  # - Выполните mount -a для проверки
+  #
+  # Применяется: Сразу, но полный эффект после перезагрузки
+  # Файл: /etc/fstab
+  replace:
+    path: /etc/fstab
+    regexp: '^(UUID=.*\s+/\s+ext4\s+)(defaults)(.*)'  # Находит строку с ext4 и корневым разделом
+    replace: '\1defaults,noatime,nodiratime\3'        # Добавляет noatime и nodiratime
+  when:
+    - host_optimization_enabled
+    - host_fstab_noatime
+    - "'ext4' in root_fs_info.stdout"  # Только для ext4
+  register: fstab_modified
+  check_mode: false  # Нельзя выполнить в check mode
+  tags:
+    - optimization
+    - filesystem
+
+- name: Добавление noatime в fstab для xfs
+  # ⚠️ КРИТИЧЕСКАЯ ОПЕРАЦИЯ: Добавляет параметр noatime в fstab для xfs.
+  #
+  # Что делает:
+  # - Находит строку с корневой файловой системой xfs в /etc/fstab
+  # - Добавляет noatime к опциям монтирования
+  # - XFS не поддерживает nodiratime (включено автоматически с noatime)
+  #
+  # Риски:
+  # - ⚠️ КРИТИЧЕСКИЙ: Неправильное изменение fstab может сделать систему неработоспособной
+  # - ⚠️ Требует перезагрузки для полного применения
+  #
+  # Применяется: Сразу, но полный эффект после перезагрузки
+  # Файл: /etc/fstab
+  replace:
+    path: /etc/fstab
+    regexp: '^(UUID=.*\s+/\s+xfs\s+)(defaults)(.*)'  # Находит строку с xfs и корневым разделом
+    replace: '\1defaults,noatime\3'                   # Добавляет noatime
+  when:
+    - host_optimization_enabled
+    - host_fstab_noatime
+    - "'xfs' in root_fs_info.stdout"  # Только для xfs
+  register: fstab_modified_xfs
+  check_mode: false  # Нельзя выполнить в check mode
+  tags:
+    - optimization
+    - filesystem
+
+- name: Применение noatime без перезагрузки
+  # Применяет noatime к корневой файловой системе без перезагрузки.
+  # Использует remount для применения новых опций монтирования.
+  #
+  # Что делает:
+  # - Выполняет remount корневой файловой системы с опциями noatime,nodiratime
+  # - Применяет изменения сразу, без перезагрузки
+  # - Действует только до перезагрузки (постоянные изменения в fstab)
+  #
+  # Безопасность:
+  # - ⚠️ Может временно повлиять на работу системы
+  # - ✅ Относительно безопасная операция
+  #
+  # Применяется: Сразу, не требует перезагрузки
+  # Команда: mount -o remount,noatime,nodiratime /
+  command: mount -o remount,noatime,nodiratime /
+  when:
+    - host_optimization_enabled
+    - host_fstab_noatime
+    - fstab_modified.changed | default(false) or fstab_modified_xfs.changed | default(false)
+    - not ansible_check_mode
+  check_mode: false  # Нельзя выполнить в check mode
+  tags:
+    - optimization
+    - filesystem
+
+- name: Получение списка дисков для настройки I/O scheduler
+  # Получает список всех физических дисков в системе.
+  # Используется для настройки I/O scheduler для каждого диска.
+  #
+  # Что делает:
+  # - Проходит по всем устройствам в /sys/block/
+  # - Проверяет наличие файла queue/scheduler (признак диска)
+  # - Извлекает имя диска (sda, sdb, nvme0n1, etc.)
+  # - Исключает виртуальные устройства (loop, ram, fd)
+  #
+  # Безопасность:
+  # - ✅ Безопасная операция - только чтение информации
+  # - ✅ Не изменяет систему
+  shell: |
+    for disk in /sys/block/*/queue/scheduler; do
+      if [ -f "$disk" ]; then
+        disk_name=$(basename $(dirname $(dirname "$disk")))
+        echo "$disk_name"
+      fi
+    done
+  register: available_disks
+  changed_when: false  # Только чтение, не изменяет систему
+  failed_when: false   # Не критично, если команда не выполнилась
+  when:
+    - host_optimization_enabled
+    - host_io_scheduler is defined
+  tags:
+    - optimization
+    - filesystem
+    - io
+
+- name: Настройка I/O scheduler для дисков
+  # Настраивает I/O scheduler для всех физических дисков.
+  #
+  # Что делает:
+  # - Устанавливает указанный I/O scheduler для каждого диска
+  # - Записывает значение в /sys/block/<disk>/queue/scheduler
+  # - Применяет изменения сразу
+  #
+  # I/O Scheduler - алгоритм планирования операций ввода/вывода:
+  # - none: для NVMe дисков (рекомендуется)
+  #   Не использует планировщик, так как NVMe имеет собственную очередь
+  # - deadline: для SSD дисков
+  #   Гарантирует время обслуживания запросов
+  # - noop: для SSD дисков
+  #   Простой FIFO планировщик, минимальные накладные расходы
+  # - cfq: для HDD дисков
+  #   Completely Fair Queuing, справедливое распределение пропускной способности
+  # - bfq: для HDD дисков (лучшая производительность)
+  #   Budget Fair Queuing, улучшенная версия cfq
+  # - mq-deadline: для современных дисков
+  #   Многопоточная версия deadline
+  # - kyber: для современных дисков
+  #   Адаптивный планировщик с самонастройкой
+  #
+  # Риски:
+  # - ⚠️ Неправильный scheduler может снизить производительность дисков
+  # - ⚠️ Может повлиять на работу системы при высокой нагрузке I/O
+  #
+  # Рекомендации:
+  # - none для NVMe дисков
+  # - deadline или noop для SSD дисков
+  # - cfq или bfq для HDD дисков
+  #
+  # Применяется: Сразу, но также нужно сохранить в udev правилах (следующая задача)
+  # Файлы: /sys/block/<disk>/queue/scheduler
+  shell: |
+    echo {{ host_io_scheduler }} > /sys/block/{{ item }}/queue/scheduler
+  when:
+    - host_optimization_enabled
+    - host_io_scheduler is defined
+    - item not in ['loop', 'ram', 'fd']  # Исключаем виртуальные устройства
+    - not ansible_check_mode
+  register: io_scheduler_set
+  failed_when: false  # Не критично, если не удалось установить
+  check_mode: false   # Нельзя выполнить в check mode
+  loop: "{{ available_disks.stdout_lines | default([]) }}"
+  tags:
+    - optimization
+    - filesystem
+    - io
+
+- name: Сохранение I/O scheduler в udev правилах
+  # Сохраняет настройки I/O scheduler в udev правилах для постоянства.
+  # Это гарантирует, что настройки будут применены при каждой загрузке системы.
+  #
+  # Что делает:
+  # - Создает или обновляет файл /etc/udev/rules.d/60-io-scheduler.rules
+  # - Добавляет правило для каждого диска
+  # - Правило применяется при обнаружении диска (загрузка или подключение)
+  #
+  # Формат правила udev:
+  # ACTION=="add|change", KERNEL=="<disk>", ATTR{queue/scheduler}="<scheduler>"
+  #
+  # Безопасность:
+  # - ✅ Безопасная операция
+  # - ✅ Применяется при загрузке системы
+  #
+  # Применяется: Сразу, но полный эффект после перезагрузки
+  # Файл: /etc/udev/rules.d/60-io-scheduler.rules
+  lineinfile:
+    path: /etc/udev/rules.d/60-io-scheduler.rules
+    regexp: '^ACTION=="add|change", KERNEL=="{{ item }}", ATTR{queue/scheduler}="'
+    line: 'ACTION=="add|change", KERNEL=="{{ item }}", ATTR{queue/scheduler}="{{ host_io_scheduler }}"'
+    create: true  # Создает файл, если не существует
+    mode: '0644'  # Права доступа: rw-r--r--
+  when:
+    - host_optimization_enabled
+    - host_io_scheduler is defined
+    - item not in ['loop', 'ram', 'fd']  # Исключаем виртуальные устройства
+  loop: "{{ available_disks.stdout_lines | default([]) }}"
+  tags:
+    - optimization
+    - filesystem
+    - io
